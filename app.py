@@ -1,55 +1,53 @@
 import os
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from datetime import datetime
+from datetime import datetime, timedelta
+from werkzeug.security import generate_password_hash, check_password_hash
+import mysql.connector
+import jwt
 from dotenv import load_dotenv
 
 load_dotenv()
 
 app = Flask(__name__)
 
-# CORS configuration for OpenShift
+# CORS configuration
 if os.environ.get('FLASK_ENV') == 'production':
     CORS(app, origins=[os.environ.get('FRONTEND_URL', '*')])
 else:
     CORS(app)
 
-# Database configuration for OpenShift
+# Secret key for JWT
+SECRET_KEY = os.environ.get('SECRET_KEY', 'fsd5f1sd2fsd1c5ds4')
+
+# DB config
 def get_db_config():
-    """Get database configuration from environment variables"""
     return {
         'host': os.environ.get('MYSQL_SERVICE_HOST', 'mysql'),
-        'port': int(os.environ.get('MYSQL_SERVICE_PORT', '3306')),
+        'port': int(os.environ.get('MYSQL_SERVICE_PORT', 3306)),
         'database': os.environ.get('MYSQL_DATABASE', 'authdb'),
         'user': os.environ.get('MYSQL_USER', 'userXAB'),
         'password': os.environ.get('MYSQL_PASSWORD', 'WEgItpR7gAmiHNUc')
     }
-import mysql.connector
-from mysql.connector import Error
 
 def get_db_connection():
     config = get_db_config()
-    try:
-        conn = mysql.connector.connect(
-            host=config['host'],
-            port=config['port'],
-            database=config['database'],
-            user=config['user'],
-            password=config['password'],
-            connection_timeout=10  # Note: 'connection_timeout' pour MySQL au lieu de 'connect_timeout'
-        )
-        return conn
-    except Error as e:
-        print(f"Error connecting to MySQL: {e}")
-        raise
+    return mysql.connector.connect(
+        host=config['host'],
+        port=config['port'],
+        database=config['database'],
+        user=config['user'],
+        password=config['password'],
+        connection_timeout=10
+    )
 
+# -------- Health check --------
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    """Health check endpoint for OpenShift"""
     try:
         conn = get_db_connection()
         cur = conn.cursor(buffered=True)
-        cur.execute('SELECT 1')
+        cur.execute("SELECT 1")
         cur.close()
         conn.close()
         return jsonify({
@@ -67,14 +65,10 @@ def health_check():
             'error': str(e)
         }), 503
 
-
-from psycopg2.extras import RealDictCursor
-from werkzeug.security import generate_password_hash
-
+# -------- Signup --------
 @app.route('/api/auth/signup', methods=['POST'])
 def signup():
     data = request.get_json()
-
     email = data.get('email')
     password = data.get('password')
     role = data.get('role', 'student')
@@ -83,39 +77,31 @@ def signup():
         return jsonify({"error": "Email and password are required"}), 400
 
     hashed_password = generate_password_hash(password)
-
     conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur = conn.cursor(dictionary=True)
 
     try:
         cur.execute(
-            """
-            INSERT INTO users (email, password_hash, role)
-            VALUES (%s, %s, %s)
-            RETURNING id, email, role
-            """,
+            "INSERT INTO users (email, password_hash, role) VALUES (%s, %s, %s)",
             (email, hashed_password, role)
         )
-        user = cur.fetchone()
         conn.commit()
-    except Exception:
+        user_id = cur.lastrowid
+        cur.execute("SELECT id, email, role FROM users WHERE id=%s", (user_id,))
+        user = cur.fetchone()
+    except mysql.connector.Error as e:
         conn.rollback()
-        return jsonify({"error": "User already exists"}), 409
+        return jsonify({"error": str(e)}), 409
     finally:
         cur.close()
         conn.close()
 
     return jsonify(user), 201
-from werkzeug.security import check_password_hash
-import jwt
-from datetime import datetime, timedelta
 
-SECRET_KEY = "fsd5f1sd2fsd1c5ds4"  # move to env var later
-
+# -------- Login --------
 @app.route('/api/auth/login', methods=['POST'])
 def login():
     data = request.get_json()
-
     email = data.get('email')
     password = data.get('password')
 
@@ -123,14 +109,10 @@ def login():
         return jsonify({"error": "Email and password are required"}), 400
 
     conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur = conn.cursor(dictionary=True)
 
-    cur.execute(
-        "SELECT id, email, password_hash, role FROM users WHERE email = %s",
-        (email,)
-    )
+    cur.execute("SELECT id, email, password_hash, role FROM users WHERE email=%s", (email,))
     user = cur.fetchone()
-
     cur.close()
     conn.close()
 
@@ -141,7 +123,7 @@ def login():
         {
             "user_id": user["id"],
             "role": user["role"],
-            "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=2)
+            "exp": datetime.utcnow() + timedelta(hours=2)
         },
         SECRET_KEY,
         algorithm="HS256"
@@ -156,6 +138,6 @@ def login():
         }
     })
 
-
+# -------- Run --------
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=False)
