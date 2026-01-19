@@ -76,7 +76,7 @@ def signup():
     if not email or not password:
         return jsonify({"error": "Email and password are required"}), 400
 
-    hashed_password = generate_password_hash(password)
+    hashed_password = generate_password_hash(password, method='pbkdf2:sha256')
     conn = get_db_connection()
     cur = conn.cursor(dictionary=True)
 
