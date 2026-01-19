@@ -1,8 +1,6 @@
 import os
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-import psycopg2
-from psycopg2.extras import RealDictCursor
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -50,7 +48,7 @@ def health_check():
     """Health check endpoint for OpenShift"""
     try:
         conn = get_db_connection()
-        cur = conn.cursor()
+        cur = conn.cursor(buffered=True)
         cur.execute('SELECT 1')
         cur.close()
         conn.close()
@@ -110,7 +108,7 @@ def signup():
     return jsonify(user), 201
 from werkzeug.security import check_password_hash
 import jwt
-import datetime
+from datetime import datetime, timedelta
 
 SECRET_KEY = "fsd5f1sd2fsd1c5ds4"  # move to env var later
 
